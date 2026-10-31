@@ -1,381 +1,245 @@
 # 🛡️ DDoS Early Warning
 
-### Detect. Understand. Alert. Before It Becomes an Outage.
-
-<p align="center">
-  <strong>A lightweight, modular, and defensive DDoS early-warning system written in Go.</strong>
-</p>
+### Notice the attack while it is forming. Tell the people who can act.
 
 <p align="center">
   <img src="https://img.shields.io/badge/Language-Go-00ADD8?logo=go&logoColor=white" alt="Go">
-  <img src="https://img.shields.io/badge/Platform-Linux-black?logo=linux" alt="Linux">
-  <img src="https://img.shields.io/badge/Architecture-Modular-blue" alt="Modular Architecture">
-  <img src="https://img.shields.io/badge/Focus-Defensive%20Security-green" alt="Defensive Security">
+  <img src="https://img.shields.io/badge/Deploy-Linux-black?logo=linux" alt="Linux">
+  <img src="https://img.shields.io/badge/Build-Single%20static%20binary-success" alt="Single static binary">
+  <img src="https://img.shields.io/badge/Focus-Defensive%20only-green" alt="Defensive only">
   <img src="https://img.shields.io/badge/Made%20in-Iran-red?logo=github" alt="Made in Iran">
 </p>
 
 <p align="center">
-  <em>Built with engineering, security, and resilience in mind. Proudly made in Iran 🇮🇷</em>
+  <em>Passive. Offline. Explainable. Built for operators who need a warning before the outage, not a dashboard after it.</em>
 </p>
 
 ---
 
-## Overview
+## What it is
 
-**DDoS Early Warning** is an open-source project designed to identify abnormal traffic behavior and provide early warnings of potential Distributed Denial of Service (DDoS) attacks.
+**DDoS Early Warning** reads your existing Nginx or HAProxy access logs, learns what normal traffic looks like for each hour of each day of the week, and raises an alert when several independent signals start to deviate together.
 
-Instead of relying exclusively on fixed traffic thresholds, the system combines statistical baselines, traffic-rate analysis, endpoint distribution, TCP-state signals, and multi-signal detection logic to identify suspicious patterns.
+It never sends traffic, never blocks anything, and never stores client IP addresses. It tells you **what changed, how sure it is, and what the runbook says to check**.
 
-The goal is simple:
+## At a glance
 
-**Detect unusual traffic behavior early, give operators meaningful context, and help them respond before availability is seriously affected.**
+| | |
+|---|---|
+| 🧠 **Learns normal** | EWMA baselines with hour-of-week seasonality, persisted across restarts |
+| 🧩 **Needs agreement** | N-of-M signal confirmation, so one noisy metric cannot page you |
+| 🧘 **Doesn't flap** | Separate enter and exit thresholds, plus minimum durations per level |
+| ❓ **Admits uncertainty** | Missing data is reported as `unknown`, never as `normal` |
+| 🔔 **Alerts with context** | File and webhook channels, deduplication, retries, and runbook text |
+| 📜 **Auditable** | Every state change and every alert is written as a JSON line |
+| 🔒 **Privacy first** | Raw IPs are used only inside the parser and are never persisted |
+| 📦 **Easy to ship** | One static binary, a systemd unit, and an offline package for air-gapped hosts |
 
-The project is designed for Linux-based environments and aims to integrate with existing Nginx and HAProxy deployments without requiring an intrusive network architecture.
+## How it thinks
 
-## Why This Project?
-
-Traditional monitoring systems often rely on static thresholds:
-
-- Requests per second exceed a predefined value.
-- CPU usage becomes unusually high.
-- Network traffic crosses a fixed bandwidth limit.
-
-These approaches can be useful, but they may produce false positives when legitimate traffic changes throughout the day or when an attack develops gradually.
-
-DDoS Early Warning takes a different approach:
-
-- Learn normal traffic behavior over time.
-- Analyze multiple independent traffic signals.
-- Detect deviations from historical patterns.
-- Use multi-signal confirmation instead of relying on a single metric.
-- Apply hysteresis to reduce alert flapping.
-- Provide actionable alerts and operator-oriented runbooks.
-
-## Core Capabilities
-
-The following capabilities are present in the current codebase or are under active development. Production readiness depends on completion and verification of the relevant tests and runtime integration.
-
-### Traffic Ingestion
-
-- Nginx access-log parsing.
-- HAProxy log parsing.
-- Log tailing with rotation awareness.
-- Traffic aggregation into time windows.
-- Structured traffic-event processing.
-
-### Statistical Baselines
-
-- Exponentially Weighted Moving Average (EWMA).
-- Hour-of-week seasonal profiles.
-- Historical traffic profiling.
-- Baseline persistence.
-
-### Detection Engine
-
-- Multi-signal detection.
-- N-of-M signal confirmation.
-- Hysteresis-based state transitions.
-- Suspicious and attack-likely classification.
-- Detection state management.
-
-### Traffic Signals
-
-- Request-rate analysis.
-- Endpoint distribution and skew.
-- TCP SYN-related signal analysis.
-
-### Alerting and Operations
-
-- File-based alert delivery.
-- HTTP webhook delivery.
-- Alert deduplication.
-- Retry and delivery-management logic.
-- Audit-event recording.
-- Operator runbook rules.
-
-> Some operational components still require further testing and end-to-end integration before they can be considered production-ready.
-
-## Architecture
-
-The intended end-to-end architecture is:
-
-```text
-          Nginx / HAProxy Logs
-                    |
-                    v
-          +-------------------+
-          |  Traffic Ingestion |
-          | Parser + Tailer    |
-          +-------------------+
-                    |
-                    v
-          +-------------------+
-          | Traffic Aggregator |
-          +-------------------+
-                    |
-                    v
-          +-------------------+
-          | Baseline Engine    |
-          | EWMA + Seasonality |
-          +-------------------+
-                    |
-                    v
-          +-------------------+
-          | Signals Engine     |
-          | Rate / Skew / TCP  |
-          +-------------------+
-                    |
-                    v
-          +-------------------+
-          | Detection Engine   |
-          | N-of-M + Hysteresis|
-          +-------------------+
-                    |
-                    v
-          +-------------------+
-          | Alert Management   |
-          +-------------------+
-                    |
-           +--------+--------+
-           |                 |
-           v                 v
-      File Alerts       HTTP Webhooks
-           |
-           v
-      Audit & Runbooks
+```mermaid
+flowchart LR
+    L[("nginx / haproxy<br/>access logs")] --> T[Tailer<br/>rotation-aware]
+    T --> P[Parser<br/>no IP kept]
+    P --> A[Aggregator<br/>time windows]
+    A --> E{Engine}
+    B[(Baseline<br/>EWMA + hour-of-week)] <--> E
+    E --> S[Signals<br/>rate · skew · SYN]
+    S --> H[Hysteresis<br/>N-of-M + timers]
+    H --> N[Notifier<br/>severity + runbook]
+    N --> M[Alert manager<br/>dedup · retry]
+    M --> F[File]
+    M --> W[Webhook]
+    H -. state changes .-> AU[(Audit log<br/>JSON Lines)]
+    M -. deliveries .-> AU
 ```
 
-The planned deployment separates responsibilities into three independent applications:
+Each window is judged on several signals at once. A window is **hot** when enough signals fire, **cool** when almost none do, and **unknown** when a signal could not run. Escalation is slow on purpose, and recovery is slower.
 
-| Component | Responsibility |
-|---|---|
-| Collector | Read, parse, and aggregate traffic logs |
-| Detector | Analyze traffic and classify abnormal behavior |
-| Notifier | Deliver alerts and manage notification workflows |
+| State | Meaning | Alerts? |
+|---|---|---|
+| `normal` | Traffic matches the learned baseline | No |
+| `warming_up` | The baseline is still learning | No |
+| `suspicious` | Several signals agree for a sustained period | Yes, warning |
+| `attack_likely` | Suspicion has persisted and still holds | Yes, critical |
+| `unknown` | Data is missing, so the system cannot judge | Yes, configurable |
 
-Durable inter-process communication and complete end-to-end integration are part of the development roadmap.
+## Signals
 
-## Detection Philosophy
+| Signal | What it measures | Platform |
+|---|---|---|
+| `rate` | Requests per window against the seasonal baseline (z-score) | Any |
+| `endpoint_skew` | Share of traffic that lands on the top-K paths | Any |
+| `syn_ratio` | Half-open TCP connections compared with established ones | Linux, one service per host |
 
-The detection engine is designed around multiple complementary signals rather than one isolated threshold.
+Reserved for later: `src_entropy` and `asn_concentration`. Configuration rejects enabling them until they exist.
 
-### 1. Baseline Deviation
+## Quick start
 
-Traffic behavior is compared against learned historical patterns.
+**Build**
 
-### 2. Request-Rate Analysis
-
-Sudden or sustained increases in request volume are evaluated.
-
-### 3. Endpoint Distribution
-
-Unusual concentration of requests on particular endpoints can contribute to suspicious-traffic classification.
-
-### 4. TCP-State Analysis
-
-TCP-state information can provide additional context about connection behavior.
-
-### 5. Multi-Signal Confirmation
-
-The detector uses N-of-M logic to avoid making decisions based on a single noisy indicator.
-
-### 6. Hysteresis
-
-State transitions use separate entry and exit requirements to reduce unstable classifications and repeated alerting.
-
-## Project Structure
-
-```text
-ddos-early-warning/
-├── configs/
-│   ├── alerts.yaml
-│   ├── collector.yaml
-│   ├── detection.yaml
-│   └── geoip/
-│
-├── internal/
-│   ├── alert/
-│   ├── audit/
-│   ├── baseline/
-│   ├── config/
-│   ├── detector/
-│   ├── ingest/
-│   ├── runbook/
-│   ├── signals/
-│   └── storage/
-│
-├── scripts/
-├── Makefile
-├── go.mod
-├── go.sum
-├── STATUS.md
-└── README.md
+```bash
+go build -o bin/ddos-ew ./cmd/ddos-ew
 ```
 
-The `internal` directory contains the core application packages. Executable entry points, deployment files, and additional operational components are part of the planned completion work.
+**Configure.** Edit the three files in `configs/`:
+- `collector.yaml`: log paths and the state directory.
+- `detection.yaml`: thresholds. The shipped values are **examples**. Tune them on your own traffic first.
+- `alerts.yaml`: channels and severities. Webhook secrets are read from environment variables, never from YAML.
 
-## Configuration
+**Run**
 
-The project uses YAML configuration files to separate operational settings.
+```bash
+./bin/ddos-ew -config configs
+```
 
-| File | Purpose |
-|---|---|
-| `configs/collector.yaml` | Log sources and collection settings |
-| `configs/detection.yaml` | Detection signals and thresholds |
-| `configs/alerts.yaml` | Alert delivery configuration |
+You will see one JSON line per service on startup. During the warm-up period, the state is `warming_up` and nothing alerts. Stop it with `Ctrl+C`. It saves the baseline before exiting.
 
-Review these files before running or deploying the application.
+## Install on a Linux server
 
-Do not enable experimental or unsupported signals in production configurations.
+```bash
+sudo ./scripts/install.sh
+```
+
+The installer creates a locked-down system user, installs the binary and configs, creates the state directory, and installs a hardened systemd unit. It never overwrites existing configs or secrets. Re-running it upgrades the binary and restarts the service.
+
+> The installer is written but has not yet been verified on a live Linux host. Please report what you find.
+
+**Offline package** (for hosts without internet access):
+
+```bash
+./scripts/package-offline.sh
+# -> dist/ddos-early-warning-<version>-linux-amd64.tar.gz (+ .sha256)
+```
+
+## What an alert looks like
+
+Example only. Values are illustrative.
+
+```json
+{
+  "id": "public-web-suspicious-3f9a1c2b7d4e",
+  "timestamp": "2026-10-31T09:14:02Z",
+  "service": "public-web",
+  "state": "suspicious",
+  "previous_state": "normal",
+  "severity": "warning",
+  "window_start": "2026-10-31T09:13:50Z",
+  "window_end": "2026-10-31T09:14:00Z",
+  "signals": [
+    { "name": "rate", "value": 6.4, "baseline": 220, "fired": true, "missing": false,
+      "reason": "z=6.40 count=910 mean=220.0 std=22.0" },
+    { "name": "endpoint_skew", "value": 0.41, "baseline": 0.18, "fired": true, "missing": false,
+      "reason": "top3 share=0.41 baseline=0.18" }
+  ],
+  "runbook": "Compare the top paths with the last deploy. Check upstream provider dashboards."
+}
+```
 
 ## Development
 
-### Requirements
+| Task | Command |
+|---|---|
+| Tests (Windows, no cgo) | `go test -count=1 ./...` |
+| Tests with race detector (Linux, cgo) | `go test -race -count=1 ./...` |
+| Static analysis | `go vet ./...` |
+| Build | `go build ./...` |
+| Windows test script | `powershell -ExecutionPolicy Bypass -File .\scripts\test.ps1 -Build` |
 
-- Go (version compatible with `go.mod`)
-- Linux recommended for deployment
-- Nginx or HAProxy logs for ingestion testing
+The race detector needs cgo. On Windows it fails without a C compiler, so use the commands above without `-race`.
 
-### Clone the repository
+## Project layout
 
-```bash
-git clone https://github.com/seyedsinanabavi/ddos-early-warning.git
-
-cd ddos-early-warning
+```text
+ddos-early-warning/
+├── cmd/ddos-ew/          # single-process entry point
+├── configs/              # collector, detection and alert settings (examples)
+├── deploy/systemd/       # hardened service unit
+├── docs/                 # limitations and operator notes
+├── internal/
+│   ├── alert/            # alert building, dedup, retry, channels
+│   ├── audit/            # JSON Lines audit log
+│   ├── baseline/         # EWMA and hour-of-week profiles
+│   ├── config/           # strict YAML loading and validation
+│   ├── detector/         # N-of-M rule, hysteresis, engine
+│   ├── ingest/           # parsers, tailer, aggregator
+│   ├── notifier/         # decision queue and alert handoff
+│   ├── runbook/          # operator guidance per state
+│   ├── signals/          # rate, endpoint skew, SYN ratio
+│   └── storage/          # baseline persistence
+├── scripts/              # install, offline packaging, test script
+├── test/integration/     # end-to-end tests with synthetic logs
+├── Makefile
+└── README.md
 ```
 
-### Prepare dependencies
+## Limits you should know about
 
-```bash
-go mod tidy
-```
+This is an **early-warning** tool. It is not a scrubbing service, not a WAF, and not a replacement for upstream DDoS protection.
 
-### Run tests
+- It only sees traffic that reaches your logs. Floods absorbed by a CDN or firewall upstream are invisible to it.
+- It does not detect volumetric network-layer floods. Those need flow data, which is outside the current scope.
+- Baselines learn quickly and forget quickly. They capture recent behavior, not long-term history.
+- Thresholds must be tuned on real traffic before the alerts mean anything.
 
-```bash
-go test ./...
-```
-
-### Run race detection
-
-```bash
-go test -race ./...
-```
-
-### Static analysis
-
-```bash
-go vet ./...
-```
-
-### Build
-
-```bash
-go build ./...
-```
-
-These commands are development and verification commands. A complete production deployment workflow will be documented when the executable applications and installation process are finalized.
+The full list, including what has not been tested, is in [docs/limitations.md](docs/limitations.md).
 
 ## Roadmap
 
-DDoS Early Warning is actively evolving.
+- [x] Nginx and HAProxy parsers, with rotation-aware tailing
+- [x] Time-window aggregation
+- [x] EWMA and hour-of-week baselines, persisted to disk
+- [x] Rate, endpoint-skew and SYN-ratio signals
+- [x] N-of-M detection with hysteresis
+- [x] File and webhook channels, with deduplication and retry
+- [x] JSON Lines audit log and runbook guidance
+- [x] Single-process binary (`cmd/ddos-ew`)
+- [x] Synthetic end-to-end integration tests
+- [x] Hardened systemd unit and installer (written)
+- [x] Offline package builder
+- [ ] Installer verified on a live Linux host
+- [ ] Threshold tuning on real traffic
+- [ ] Bounded memory for path counts under attack-like cardinality
+- [ ] Gap counting and a `degraded` state for dropped windows
+- [ ] Fallback alert channel and a bounded retry queue
+- [ ] Watchdog and per-goroutine panic isolation
+- [ ] Log-based web-attack signals (brute force, scanning, error spikes)
+- [ ] Optional separate collector, detector and notifier processes
+- [ ] `src_entropy` and `asn_concentration` signals
 
-- [x] Core Go package structure
-- [x] Nginx and HAProxy log parsers
-- [x] Traffic aggregation
-- [x] EWMA baseline implementation
-- [x] Seasonal baseline profiles
-- [x] Multi-signal detection foundations
-- [x] Hysteresis-based detection logic
-- [x] Initial alert management components
-- [x] Initial audit components
-- [x] Initial runbook components
-- [ ] Complete alert-delivery reliability and testing
-- [ ] Comprehensive audit and runbook tests
-- [ ] Durable inter-process communication
-- [ ] Collector executable
-- [ ] Detector executable
-- [ ] Notifier executable
-- [ ] End-to-end integration tests
-- [ ] Crash recovery and delivery guarantees
-- [ ] Linux systemd service integration
-- [ ] Automated installation script
-- [ ] Offline deployment package
-- [ ] Complete production deployment documentation
+See [STATUS.md](STATUS.md) for detailed implementation status.
 
-See [STATUS.md](STATUS.md) for the latest implementation status.
+## Security & privacy
 
-## Security & Privacy
+- **Passive.** The tool reads logs and TCP state. It never generates traffic.
+- **No automatic blocking.** It never changes firewall rules or blocks IPs.
+- **No raw IPs at rest.** Aggregates, baselines, alerts and audit entries contain counts and derived values only.
+- **Least privilege.** The service runs as its own user, with write access limited to its state directory.
+- **Secrets stay out of files.** Webhook tokens and HMAC secrets come from environment variables.
 
-Security and data integrity are important design principles.
+Your log files still contain client IPs. Control their access and retention yourself.
 
-The project is intended to operate as a defensive monitoring system.
+## Responsible use
 
-Design principles:
-
-- Passive traffic observation.
-- No attack-traffic generation.
-- No automatic firewall modification.
-- No automatic IP blocking.
-- Explicit error handling.
-- Controlled access to log and state files.
-- Avoid unnecessary collection of sensitive information.
-- Reliable alert delivery and auditability.
-
-Operators should review log access permissions, retention policies, webhook credentials, and deployment privileges before production use.
-
-## Limitations
-
-This project is under active development and should not yet be considered a fully validated production-grade DDoS mitigation platform.
-
-In particular:
-
-- It is an early-warning and monitoring system, not a traffic scrubbing service.
-- It does not replace upstream DDoS protection.
-- TCP-state signals may represent host-level rather than individual-service behavior.
-- Some planned traffic signals are not implemented yet.
-- Production deployment requires completed process integration, durable delivery, and operational testing.
-
-Use it alongside established infrastructure monitoring and DDoS protection solutions.
+Use it only on systems and networks you own, or that you are explicitly authorized to monitor.
 
 ## Contributing
 
-Contributions, bug reports, feature suggestions, and security improvements are welcome.
-
-Before submitting a pull request:
-
-1. Open an issue describing the proposed change.
-2. Keep changes focused and modular.
+1. Open an issue that describes the change.
+2. Keep changes small and modular.
 3. Add tests for new behavior.
-4. Run `go test -race ./...`.
-5. Run `go vet ./...`.
-6. Document configuration changes.
-7. Never claim unverified functionality.
-
-Please avoid introducing breaking changes to existing detection logic without explaining their impact.
-
-## Responsible Use
-
-This project is intended exclusively for defensive monitoring, early warning, and authorized infrastructure observability.
-
-Use it only on systems and networks you own or are explicitly authorized to monitor.
-
-## Author & Origin
-
-**Created and developed in Iran 🇮🇷**
-
-Built with Go and open-source engineering principles.
-
-**Made in Iran. Built for a more resilient internet.**
+4. Run `go vet ./...` and the test commands above.
+5. Document configuration changes.
+6. Do not claim functionality you have not verified.
 
 ## License
 
-See the [LICENSE](LICENSE) file for licensing terms.
+See [LICENSE](LICENSE).
 
 ---
 
 <p align="center">
-  <strong>Detect earlier. Respond smarter. Stay resilient.</strong>
+  <strong>Detect earlier. Explain clearly. Stay calm.</strong>
   <br>
   <em>DDoS Early Warning — Made in Iran 🇮🇷</em>
 </p>
