@@ -52,3 +52,31 @@ func (d *Dedup) Purge(now time.Time) {
 		}
 	}
 }
+
+// Seen reports whether id was delivered within the cooldown before now. It does
+// not change any state. The previous delivery time is returned when seen.
+func (d *Dedup) Seen(id string, now time.Time) (bool, time.Time) {
+	if d.Cooldown <= 0 {
+		return false, time.Time{}
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if t, ok := d.lastAt[id]; ok && now.Sub(t) < d.Cooldown {
+		return true, t
+	}
+	return false, time.Time{}
+}
+
+// Mark records a successful delivery of id at now. Call it only after at least
+// one channel accepted the alert, so a fully failed alert is not suppressed.
+func (d *Dedup) Mark(id string, now time.Time) {
+	if d.Cooldown <= 0 {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.lastAt == nil {
+		d.lastAt = map[string]time.Time{}
+	}
+	d.lastAt[id] = now
+}

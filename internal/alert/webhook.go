@@ -39,10 +39,17 @@ func NewWebhookChannel(c config.ChannelConfig) (*WebhookChannel, error) {
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
-	ch := &WebhookChannel{
+		ch := &WebhookChannel{
 		name: c.Name,
 		url:  c.URL,
-		client: &http.Client{Timeout: timeout},
+		client: &http.Client{
+			Timeout: timeout,
+			// Never follow redirects: a redirect could send the alert, and any
+			// bearer token, to a host the operator did not configure.
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 	}
 	if c.Auth != nil {
 		switch c.Auth.Type {

@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/seyedsinanabavi/ddos-early-warning/internal/detector"
-	"github.com/seyedsinanabavi/ddos-early-warning/internal/signals"
 )
 
 // Alert is one alert event. Its JSON form is what channels receive.
@@ -38,10 +37,11 @@ type SignalSummary struct {
 	Reason   string  `json:"reason,omitempty"`
 }
 
-// Build creates an Alert from a detector Decision and runbook text.
-func Build(service, severity, runbook string, d detector.Decision) Alert {
+// Build creates an Alert from a detector Decision and runbook text. now is the
+// caller's clock reading and becomes the alert timestamp.
+func Build(service, severity, runbook string, d detector.Decision, now time.Time) Alert {
 	a := Alert{
-		Timestamp:     time.Now().UTC(),
+		Timestamp:     now.UTC(),
 		Service:       service,
 		State:         d.State.String(),
 		PreviousState: d.Previous.String(),
@@ -50,7 +50,6 @@ func Build(service, severity, runbook string, d detector.Decision) Alert {
 		WindowEnd:     d.WindowEnd.UTC(),
 		Runbook:       runbook,
 	}
-	a.ID = deriveID(a)
 	for _, r := range d.Results {
 		a.Signals = append(a.Signals, SignalSummary{
 			Name:     r.Name,
@@ -61,14 +60,18 @@ func Build(service, severity, runbook string, d detector.Decision) Alert {
 			Reason:   r.Reason,
 		})
 	}
+	// The id needs the signal list, so it is derived after the list is filled.
+	a.ID = deriveID(a)
 	return a
 }
 
-// deriveID builds a stable id from service, state and the set of fired signals.
-// Two alerts with the same id describe the same situation and are deduplicated.
+// deriveID builds a stable id from service, state and the set of fired
+// signals. It deliberately excludes the window time: a situation that persists
+// across windows must produce the same id so the cooldown can suppress repeats.
+// Missing signals are not part of the id, because they are not fired.
 func deriveID(a Alert) string {
 	h := sha256.New()
-	fmt.Fprintf(h, "%s|%s|%s|", a.Service, a.State, a.WindowStart.UTC().Format(time.RFC3339))
+	fmt.Fprintf(h, "%s|%s|", a.Service, a.State)
 	for _, s := range a.Signals {
 		if s.Fired && !s.Missing {
 			fmt.Fprintf(h, "%s,", s.Name)

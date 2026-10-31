@@ -38,6 +38,7 @@ type Logger struct {
 	mu     sync.Mutex
 	w      io.Writer
 	fanout []*Logger
+	now    func() time.Time // injected clock; time.Now when nil
 }
 
 // New returns a Logger writing JSON Lines to w.
@@ -45,7 +46,15 @@ func New(w io.Writer) *Logger {
 	if w == nil {
 		return nil
 	}
-	return &Logger{w: w}
+	return &Logger{w: w, now: func() time.Time { return time.Now().UTC() }}
+}
+
+// clock returns the current time from the injected clock.
+func (l *Logger) clock() time.Time {
+	if l.now == nil {
+		return time.Now().UTC()
+	}
+	return l.now().UTC()
 }
 
 // Log writes one event. It never returns an error: audit failures must not
@@ -64,7 +73,7 @@ func (l *Logger) Log(ev Event) {
 		return
 	}
 	if ev.Time.IsZero() {
-		ev.Time = time.Now().UTC()
+		ev.Time = l.clock()
 	}
 	b, err := json.Marshal(ev)
 	if err != nil {

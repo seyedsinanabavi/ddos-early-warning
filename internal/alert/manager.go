@@ -20,46 +20,64 @@ type Channel interface {
 type Manager struct {
 	Dedup    *Dedup
 	Channels []Channel
-	Retries  int
-	Backoff  time.Duration
-	Audit    *audit.Logger
+	// Retries is the number of extra attempts per channel after the first.
+	Retries int
+	// Backoff is the delay before the first retry. It doubles per attempt.
+	Backoff time.Duration
+	// BackoffMax caps the doubling. Zero means no cap.
+	BackoffMax time.Duration
+	Audit      *audit.Logger
+	// Now is the injected clock. time.Now (in UTC) is used when nil.
+	Now func() time.Time
 }
 
-// Dispatch delivers a to every channel. Delivery failures are recorded in the
-// audit log and never silently dropped. Dispatch returns an error only if all
-// channels fail; partial failure is reported via the audit log.
-func (m *Manager) Dispatch(ctx context.Context, a Alert) error {
-	if m.Dedup != nil {
-		if ok, prev := m.Dedup.Allow(a.ID, time.Now()); !ok {
-			if m.Audit != nil {
-				m.Audit.Log(audit.Event{
-					Type:    "alert.deduplicated",
-					Service: a.Service,
-					Fields:  map[string]string{"alert_id": a.ID, "previous": prev.Format(time.RFC3339)},
-				})
-			}
-			return nil
-		}
+func (m *Manager) now() time.Time {
+	if m.Now == nil {
+		return time.Now().UTC()
 	}
+	return m.Now().UTC()
+}
+
+// Dispatch delivers a to every channel.
+//
+// An alert whose id was delivered within the dedup cooldown is skipped and
+// audited. The id is marked as delivered only when at least one channel
+// accepts it, so an alert that every channel rejected is retried on the next
+// window instead of being suppressed.
+//
+// Dispatch returns an error only when no channel is configured or every
+// channel fails. Partial failures are recorded in the audit log.
+func (m *Manager) Dispatch(ctx context.Context, a Alert) error {
 	if len(m.Channels) == 0 {
 		return errors.New("alert: no channels configured")
+	}
+	now := m.now()
+
+	if m.Dedup != nil {
+		if seen, prev := m.Dedup.Seen(a.ID, now); seen {
+			m.Audit.Log(audit.Event{
+				Type:    audit.EventAlertDeduplicated,
+				Service: a.Service,
+				Fields:  map[string]string{"alert_id": a.ID, "previous": prev.Format(time.RFC3339)},
+			})
+			return nil
+		}
 	}
 
 	var failures int
 	for _, ch := range m.Channels {
 		if err := m.deliverWithRetry(ctx, ch, a); err != nil {
 			failures++
-			if m.Audit != nil {
-				m.Audit.AlertFailed(a.Service, a.ID, ch.Name(), err.Error())
-			}
+			m.Audit.AlertFailed(a.Service, a.ID, ch.Name(), err.Error())
 			continue
 		}
-		if m.Audit != nil {
-			m.Audit.AlertDelivered(a.Service, a.ID, ch.Name())
-		}
+		m.Audit.AlertDelivered(a.Service, a.ID, ch.Name())
 	}
 	if failures == len(m.Channels) {
 		return fmt.Errorf("alert: all %d channels failed for %s", failures, a.ID)
+	}
+	if m.Dedup != nil {
+		m.Dedup.Mark(a.ID, now)
 	}
 	return nil
 }
@@ -75,19 +93,24 @@ func (m *Manager) deliverWithRetry(ctx context.Context, ch Channel, a Alert) err
 	}
 	var lastErr error
 	for i := 0; i < attempts; i++ {
-		if err := ch.Deliver(ctx, a); err == nil {
+		err := ch.Deliver(ctx, a)
+		if err == nil {
 			return nil
-		} else {
-			lastErr = err
 		}
+		lastErr = err
 		if i == attempts-1 {
 			break
 		}
+		timer := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return ctx.Err()
-		case <-time.After(backoff):
-			backoff *= 2
+		case <-timer.C:
+		}
+		backoff *= 2
+		if m.BackoffMax > 0 && backoff > m.BackoffMax {
+			backoff = m.BackoffMax
 		}
 	}
 	return lastErr
