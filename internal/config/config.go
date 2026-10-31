@@ -46,7 +46,6 @@ type ServiceConfig struct {
 	AggregateInterval string   `yaml:"aggregate_interval"`
 	NginxFormat       string   `yaml:"nginx_format"`
 
-	// Parsed forms (populated by Validate).
 	Interval time.Duration `yaml:"-"`
 }
 
@@ -115,11 +114,10 @@ type StubSignalConfig struct {
 
 // DetectorConfig controls the N-of-M rule and hysteresis.
 type DetectorConfig struct {
-	EnterSignalsRequired            int    `yaml:"enter_signals_required"`
-	ExitSignalsRequired             int    `yaml:"exit_signals_required"`
-	MinDurationSuspicious           string `yaml:"min_duration_suspicious"`
-	MinDurationAttackLikely         string `yaml:"min_duration_attack_likely"`
-	RequireAllEnabledSignalsPresent bool   `yaml:"require_all_enabled_signals_present"`
+	EnterSignalsRequired    int    `yaml:"enter_signals_required"`
+	ExitSignalsRequired     int    `yaml:"exit_signals_required"`
+	MinDurationSuspicious   string `yaml:"min_duration_suspicious"`
+	MinDurationAttackLikely string `yaml:"min_duration_attack_likely"`
 
 	MinDurSuspicious   time.Duration `yaml:"-"`
 	MinDurAttackLikely time.Duration `yaml:"-"`
@@ -157,10 +155,20 @@ type ChannelConfig struct {
 	MaxRetries  int    `yaml:"max_retries,omitempty"`
 	BackoffBase string `yaml:"backoff_base,omitempty"`
 	BackoffMax  string `yaml:"backoff_max,omitempty"`
+	Auth        *WebhookAuthConfig `yaml:"auth,omitempty"`
 
 	TimeoutDur     time.Duration `yaml:"-"`
 	BackoffBaseDur time.Duration `yaml:"-"`
 	BackoffMaxDur  time.Duration `yaml:"-"`
+}
+
+// WebhookAuthConfig describes how to authenticate a webhook call. Secrets are
+// always read from the environment; they never appear in YAML.
+type WebhookAuthConfig struct {
+	Type      string `yaml:"type"` // bearer | hmac
+	TokenEnv  string `yaml:"token_env,omitempty"`
+	SecretEnv string `yaml:"secret_env,omitempty"`
+	Header    string `yaml:"header,omitempty"` // for hmac; default X-Signature
 }
 
 // Load reads and validates the three config files from dir.
@@ -209,6 +217,15 @@ func (c *Config) Validate() error {
 	errs = append(errs, c.Collector.validate())
 	errs = append(errs, c.Detection.validate())
 	errs = append(errs, c.Alerts.validate())
+
+	// Cross-section validation: syn_ratio reads host-wide TCP state and
+	// cannot be attributed to one service when several are configured.
+	if c.Detection.Signals.SYNRatio.Enabled && len(c.Collector.Services) > 1 {
+		errs = append(errs, fmt.Errorf(
+			"detection.signals.syn_ratio.enabled: cannot be enabled with %d services; "+
+				"host-wide TCP state cannot be attributed to a single service (see docs/limitations.md)",
+			len(c.Collector.Services)))
+	}
 	return errors.Join(errs...)
 }
 
@@ -239,7 +256,7 @@ func (c *CollectorConfig) validate() error {
 			errs = append(errs, fmt.Errorf("%s.log_paths: empty", prefix))
 		}
 		for j, p := range s.LogPaths {
-			if !filepath.IsAbs(p) {
+			if !isAbsPath(p) {
 				errs = append(errs, fmt.Errorf("%s.log_paths[%d]: must be absolute: %q", prefix, j, p))
 			}
 		}
@@ -261,7 +278,7 @@ func (c *CollectorConfig) validate() error {
 	}
 	if c.Storage.Dir == "" {
 		errs = append(errs, errors.New("collector.storage.dir: empty"))
-	} else if !filepath.IsAbs(c.Storage.Dir) {
+	} else if !isAbsPath(c.Storage.Dir) {
 		errs = append(errs, fmt.Errorf("collector.storage.dir: must be absolute: %q", c.Storage.Dir))
 	}
 	return errors.Join(errs...)
@@ -414,7 +431,7 @@ func (a *AlertsConfig) validate() error {
 		case "file":
 			if ch.Path == "" {
 				errs = append(errs, fmt.Errorf("%s.path: required for file channel", prefix))
-			} else if !filepath.IsAbs(ch.Path) {
+			} else if !isAbsPath(ch.Path) {
 				errs = append(errs, fmt.Errorf("%s.path: must be absolute: %q", prefix, ch.Path))
 			}
 		case "webhook":
@@ -451,6 +468,23 @@ func (a *AlertsConfig) validate() error {
 					ch.BackoffMaxDur = d
 				}
 			}
+			if ch.Auth != nil {
+				switch ch.Auth.Type {
+				case "bearer":
+					if ch.Auth.TokenEnv == "" {
+						errs = append(errs, fmt.Errorf("%s.auth.token_env: required for bearer auth", prefix))
+					}
+				case "hmac":
+					if ch.Auth.SecretEnv == "" {
+						errs = append(errs, fmt.Errorf("%s.auth.secret_env: required for hmac auth", prefix))
+					}
+					if ch.Auth.Header == "" {
+						ch.Auth.Header = "X-Signature"
+					}
+				default:
+					errs = append(errs, fmt.Errorf("%s.auth.type: want bearer|hmac got %q", prefix, ch.Auth.Type))
+				}
+			}
 		default:
 			errs = append(errs, fmt.Errorf("%s.type: want file|webhook got %q", prefix, ch.Type))
 		}
@@ -473,28 +507,18 @@ func enabledSignals(s *SignalsConfig) []string {
 	return out
 }
 
-// redactURL removes the path/query of a URL for safe logging.
-func redactURL(raw string) string {
-	if raw == "" {
-		return ""
+// isAbsPath reports whether p is absolute on any supported platform.
+//
+// filepath.IsAbs returns false on Windows for POSIX paths such as
+// "/var/log/nginx/access.log", which are valid on the Linux deployment
+// target. Accepting them keeps the same config working in dev (Windows) and
+// in production (Linux).
+func isAbsPath(p string) bool {
+	if p == "" {
+		return false
 	}
-	// Best-effort: keep scheme + host only.
-	// Avoid net/url dependency here just for logging; do it in the alert
-	// package. Kept exported for reuse.
-	return redact(raw)
-}
-
-// redact is a small helper so tests can exercise redaction without net/url.
-func redact(raw string) string {
-	// scheme://host/path?... -> scheme://host
-	schemeSep := strings.Index(raw, "://")
-	if schemeSep < 0 {
-		return "<redacted>"
+	if filepath.IsAbs(p) {
+		return true
 	}
-	rest := raw[schemeSep+3:]
-	hostEnd := strings.IndexAny(rest, "/?#")
-	if hostEnd < 0 {
-		return raw
-	}
-	return raw[:schemeSep+3+hostEnd]
+	return strings.HasPrefix(p, "/")
 }
