@@ -11,6 +11,7 @@ import (
 // Params controls the N-of-M rule and the timing of the state machine.
 //
 // Rule per window (evaluated on the enabled signals only):
+//   - RequireAll and any signal Missing       -> unknown
 //   - fired >= EnterRequired                  -> hot
 //   - any signal Missing (and not hot)        -> unknown
 //   - fired <= ExitRequired                   -> cool
@@ -28,6 +29,9 @@ type Params struct {
 	ExitRequired    int
 	MinSuspicious   time.Duration
 	MinAttackLikely time.Duration
+	// RequireAll makes any Missing signal mark the window unknown, even when
+	// enough other signals fired.
+	RequireAll bool
 }
 
 // Validate checks the parameters. The engine refuses to start with invalid ones.
@@ -71,6 +75,8 @@ func classify(p Params, results []signals.Result) verdict {
 		}
 	}
 	switch {
+	case p.RequireAll && missing > 0:
+		return vUnknown
 	case fired >= p.EnterRequired:
 		return vHot
 	case missing > 0:

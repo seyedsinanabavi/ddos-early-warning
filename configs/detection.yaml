@@ -20,7 +20,7 @@ signals:
     ratio_threshold_exit: 0.25
     min_volume_floor: 5
   syn_ratio:
-    enabled: true
+    enabled: false
     enter_ratio: 0.30
     exit_ratio: 0.20
     min_established: 10

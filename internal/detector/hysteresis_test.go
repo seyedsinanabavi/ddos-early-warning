@@ -191,3 +191,18 @@ func TestStateString(t *testing.T) {
 		}
 	}
 }
+
+func TestClassify_RequireAllEnabledSignals(t *testing.T) {
+	p := defaultParams()
+	p.RequireAll = true
+	if got := classify(p, res(2, 1)); got != vUnknown {
+		t.Fatalf("with require_all, a missing signal must be unknown even when hot, got %d", got)
+	}
+	if got := classify(p, res(2, 0)); got != vHot {
+		t.Fatalf("with all signals present, hot must stay hot, got %d", got)
+	}
+	p.RequireAll = false
+	if got := classify(p, res(2, 1)); got != vHot {
+		t.Fatalf("without require_all, hot wins over missing, got %d", got)
+	}
+}

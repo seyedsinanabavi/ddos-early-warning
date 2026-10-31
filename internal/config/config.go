@@ -118,6 +118,9 @@ type DetectorConfig struct {
 	ExitSignalsRequired     int    `yaml:"exit_signals_required"`
 	MinDurationSuspicious   string `yaml:"min_duration_suspicious"`
 	MinDurationAttackLikely string `yaml:"min_duration_attack_likely"`
+	// RequireAllEnabledSignalsPresent makes any missing signal mark the window
+	// unknown, even when enough other signals fired.
+	RequireAllEnabledSignalsPresent bool `yaml:"require_all_enabled_signals_present"`
 
 	MinDurSuspicious   time.Duration `yaml:"-"`
 	MinDurAttackLikely time.Duration `yaml:"-"`
@@ -147,14 +150,14 @@ type DedupConfig struct {
 
 // ChannelConfig is a single alert delivery channel.
 type ChannelConfig struct {
-	Name        string `yaml:"name"`
-	Type        string `yaml:"type"` // file | webhook
-	Path        string `yaml:"path,omitempty"`
-	URL         string `yaml:"url,omitempty"`
-	Timeout     string `yaml:"timeout,omitempty"`
-	MaxRetries  int    `yaml:"max_retries,omitempty"`
-	BackoffBase string `yaml:"backoff_base,omitempty"`
-	BackoffMax  string `yaml:"backoff_max,omitempty"`
+	Name        string             `yaml:"name"`
+	Type        string             `yaml:"type"` // file | webhook
+	Path        string             `yaml:"path,omitempty"`
+	URL         string             `yaml:"url,omitempty"`
+	Timeout     string             `yaml:"timeout,omitempty"`
+	MaxRetries  int                `yaml:"max_retries,omitempty"`
+	BackoffBase string             `yaml:"backoff_base,omitempty"`
+	BackoffMax  string             `yaml:"backoff_max,omitempty"`
 	Auth        *WebhookAuthConfig `yaml:"auth,omitempty"`
 
 	TimeoutDur     time.Duration `yaml:"-"`
