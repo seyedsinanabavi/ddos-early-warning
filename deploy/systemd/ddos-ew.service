@@ -1,0 +1,33 @@
+[Unit]
+Description=ddos-early-warning: log-based DDoS early warning
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ddos-ew
+Group=ddos-ew
+ExecStart=/usr/local/bin/ddos-ew -config /etc/ddos-ew
+EnvironmentFile=-/etc/ddos-ew/ddos-ew.env
+Restart=on-failure
+RestartSec=5s
+
+# Hardening. Writes are limited to the state directory. If an alert channel
+# writes to a file outside it, add that directory to ReadWritePaths.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/ddos-ew
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
