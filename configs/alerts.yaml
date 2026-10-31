@@ -1,0 +1,22 @@
+# EXAMPLE VALUES — tune before production.
+version: 1
+
+severity:
+  suspicious: "warning"
+  attack_likely: "critical"
+  unknown: "warning"
+
+dedup:
+  cooldown: "5m"
+
+channels:
+  - name: "local-log"
+    type: "file"
+    path: "/var/log/ddos-ew/alerts.log"
+  - name: "ops-webhook"
+    type: "webhook"
+    url: "https://hooks.internal.example/ddos"
+    timeout: "5s"
+    max_retries: 3
+    backoff_base: "1s"
+    backoff_max: "30s"

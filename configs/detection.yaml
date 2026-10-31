@@ -1,0 +1,33 @@
+# EXAMPLE VALUES — tune on real traffic before production.
+version: 1
+
+baseline:
+  ewma_alpha: 0.2
+  seasonal_buckets: 168
+  warmup_duration: "30m"
+  min_samples_for_baseline: 30
+
+signals:
+  rate:
+    enabled: true
+    min_volume_floor: 5
+    z_threshold_enter: 4.0
+    z_threshold_exit: 2.5
+  endpoint_skew:
+    enabled: true
+    top_k: 3
+    ratio_threshold_enter: 0.35
+    ratio_threshold_exit: 0.25
+    min_volume_floor: 5
+  syn_ratio:
+    enabled: true
+    enter_ratio: 0.30
+    exit_ratio: 0.20
+    min_established: 10
+
+detector:
+  enter_signals_required: 2
+  exit_signals_required: 1
+  min_duration_suspicious: "2m"
+  min_duration_attack_likely: "1m"
+  require_all_enabled_signals_present: false
